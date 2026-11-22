@@ -1,0 +1,166 @@
+[
+  {
+    "id": "ex_dorm_pushup",
+    "name": "Silent Floor Push-Up",
+    "type": "strength",
+    "muscleGroups": [
+      "chest",
+      "triceps",
+      "front_deltoids",
+      "core"
+    ],
+    "equipmentRequired": [
+      "bodyweight",
+      "yoga_mat"
+    ],
+    "isSilentLowImpact": true,
+    "isHeadNeckBridge": false,
+    "defaultRpeCap": 8,
+    "formCues": [
+      "Set hands under shoulders, spread fingers, and screw palms lightly into the mat.",
+      "Keep body in a straight line from ears to heels; brace ribs down and glutes tight.",
+      "Lower with elbows at 30-45 degrees until chest hovers above mat, then press evenly through palms.",
+      "Exhale on press, keep neck neutral, and avoid dropping hips at the bottom."
+    ],
+    "safetyWarning": "Stop immediately if you feel sharp shoulder, elbow, or wrist pain. Keep the movement silent and controlled; no bouncing or collapsing at the bottom.",
+    "swapAlternativeId": "ex_dorm_incline_pushup",
+    "localVideoPath": "/videos/exercises/silent-floor-pushup.mp4",
+    "fallbackYoutubeUrl": "https://www.youtube.com/watch?v=IODxDxX7oi4"
+  },
+  {
+    "id": "ex_dorm_incline_pushup",
+    "name": "Elevated Desk Incline Push-Up",
+    "type": "strength",
+    "muscleGroups": [
+      "chest",
+      "triceps",
+      "front_deltoids",
+      "core"
+    ],
+    "equipmentRequired": [
+      "bodyweight"
+    ],
+    "isSilentLowImpact": true,
+    "isHeadNeckBridge": false,
+    "defaultRpeCap": 8,
+    "formCues": [
+      "Place hands shoulder-width on a stable desk or bed frame edge; step feet back to a firm plank.",
+      "Keep elbows tracking slightly back, not flared wide, while maintaining a neutral spine.",
+      "Lower chest toward the edge slowly, pause briefly, then press back without locking elbows hard.",
+      "Move quietly through full control; adjust foot distance to keep RPE at or below cap."
+    ],
+    "safetyWarning": "Use only a stable, non-rolling surface. Stop if the surface shifts, wrists hurt, or shoulder pain appears.",
+    "swapAlternativeId": "ex_dorm_db_floor_press",
+    "localVideoPath": "/videos/exercises/elevated-desk-incline-pushup.mp4",
+    "fallbackYoutubeUrl": "https://www.youtube.com/watch?v=cfns5VDVVzU"
+  },
+  {
+    "id": "ex_dorm_db_floor_press",
+    "name": "Dumbbell Floor Press (2kg Pair)",
+    "type": "strength",
+    "muscleGroups": [
+      "chest",
+      "triceps",
+      "front_deltoids"
+    ],
+    "equipmentRequired": [
+      "dumbbell_2kg_pair",
+      "yoga_mat"
+    ],
+    "isSilentLowImpact": true,
+    "isHeadNeckBridge": false,
+    "defaultRpeCap": 8,
+    "formCues": [
+      "Lie on mat with knees bent, feet flat, and dumbbells held above chest with wrists stacked.",
+      "Lower elbows until upper arms gently touch the floor; keep forearms vertical.",
+      "Press dumbbells up smoothly without clanging them together at the top.",
+      "Maintain ribcage down and glutes lightly engaged to protect lower back."
+    ],
+    "safetyWarning": "Do not drop dumbbells. Stop if you feel shoulder pinching or elbow pain. Keep tempo slow and silent on the floor contact.",
+    "swapAlternativeId": "ex_dorm_pushup",
+    "localVideoPath": "/videos/exercises/dumbbell-floor-press-2kg.mp4",
+    "fallbackYoutubeUrl": "https://www.youtube.com/watch?v=uUGDRwge4F8"
+  },
+  {
+    "id": "ex_dorm_backpack_squat",
+    "name": "Backpack Tempo Squat",
+    "type": "strength",
+    "muscleGroups": [
+      "quadriceps",
+      "glutes",
+      "hamstrings",
+      "core"
+    ],
+    "equipmentRequired": [
+      "loadable_backpack",
+      "yoga_mat"
+    ],
+    "isSilentLowImpact": true,
+    "isHeadNeckBridge": false,
+    "defaultRpeCap": 8,
+    "formCues": [
+      "Hold loaded backpack close to chest or wear it snug; feet shoulder-width, toes slightly out.",
+      "Brace core and inhale as you sit hips back and down with controlled tempo.",
+      "Keep heels planted and knees tracking over mid-foot; descend only to a pain-free depth.",
+      "Exhale and drive through whole foot to stand, avoiding knee lockout slam."
+    ],
+    "safetyWarning": "Use a securely packed backpack; loose books can shift. Stop for knee, hip, or lower-back pain. No jumping or bouncing.",
+    "swapAlternativeId": "ex_dorm_glute_bridge",
+    "localVideoPath": "/videos/exercises/backpack-tempo-squat.mp4",
+    "fallbackYoutubeUrl": "https://www.youtube.com/watch?v=aclHkVaku9U"
+  },
+  {
+    "id": "ex_dorm_glute_bridge",
+    "name": "Silent Glute Bridge",
+    "type": "strength",
+    "muscleGroups": [
+      "glutes",
+      "hamstrings",
+      "core"
+    ],
+    "equipmentRequired": [
+      "yoga_mat",
+      "bodyweight"
+    ],
+    "isSilentLowImpact": true,
+    "isHeadNeckBridge": false,
+    "defaultRpeCap": 8,
+    "formCues": [
+      "Lie on back, knees bent, feet flat hip-width; arms rest palms-down for stability.",
+      "Exhale and drive through heels to lift hips until shoulders-hips-knees align.",
+      "Squeeze glutes at top for one second without overextending lower back.",
+      "Lower hips slowly with control, keeping ribs down and neck relaxed on mat."
+    ],
+    "safetyWarning": "Stop if you feel lower-back pinch or hamstring cramp. Keep neck neutral on the mat; this is not a neck bridge variation.",
+    "swapAlternativeId": "ex_dorm_dead_bug",
+    "localVideoPath": "/videos/exercises/silent-glute-bridge.mp4",
+    "fallbackYoutubeUrl": "https://www.youtube.com/watch?v=wPM8icPu6H8"
+  },
+  {
+    "id": "ex_dorm_dead_bug",
+    "name": "Dead Bug Core Control",
+    "type": "mobility",
+    "muscleGroups": [
+      "core",
+      "deep_abdominals",
+      "hip_flexors"
+    ],
+    "equipmentRequired": [
+      "yoga_mat",
+      "bodyweight"
+    ],
+    "isSilentLowImpact": true,
+    "isHeadNeckBridge": false,
+    "defaultRpeCap": 8,
+    "formCues": [
+      "Lie on back with arms above shoulders and knees bent at 90 degrees over hips.",
+      "Press lower back gently toward mat and brace core before moving limbs.",
+      "Extend opposite arm and leg slowly while keeping ribs heavy and back contact stable.",
+      "Return with control and alternate sides, breathing steadily without rushing."
+    ],
+    "safetyWarning": "Stop if lower back lifts off the mat or you feel neck strain. Move only within a range you can control silently.",
+    "swapAlternativeId": "ex_dorm_pushup",
+    "localVideoPath": "/videos/exercises/dead-bug-core-control.mp4",
+    "fallbackYoutubeUrl": "https://www.youtube.com/watch?v=g_BYB0R-4Ws"
+  }
+]

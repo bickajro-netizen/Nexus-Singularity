@@ -1,0 +1,29 @@
+/* Shared widget styles — Arcane Grimoire tokens */
+.xp-bar { min-width: 160px; }
+.xp-bar-track { height: 8px; border-radius: 4px; background: rgba(232,220,192,.12); overflow: hidden; box-shadow: inset 0 0 3px rgba(0,0,0,.6); }
+.xp-bar-fill { height: 100%; background: linear-gradient(90deg, var(--gold-dark), var(--gold)); box-shadow: 0 0 6px rgba(201,162,39,.7); transition: width .4s ease; }
+.xp-bar-label { font-size: 11px; letter-spacing: .08em; color: var(--gold); margin-bottom: 3px; text-transform: uppercase; }
+
+.battery-chips { display: flex; gap: 8px; flex-wrap: wrap; }
+.battery-chip { display: flex; flex-direction: column; align-items: center; gap: 2px; min-width: 74px; padding: 5px 8px; border: 1px solid rgba(232,220,192,.15); border-radius: 8px; background: rgba(23,19,31,.85); }
+.battery-chip .chip-name { font-size: 10px; letter-spacing: .1em; text-transform: uppercase; color: var(--ink-dim); }
+.battery-chip .chip-value { font-size: 15px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.battery-chip.green .chip-value { color: var(--green); }
+.battery-chip.amber .chip-value { color: var(--amber); }
+.battery-chip.red .chip-value { color: var(--crimson); }
+
+.yerkes-gauge { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+.yerkes-gauge .gauge-caption { font-size: 12px; color: var(--ink-dim); }
+.yerkes-gauge .gauge-caption strong { color: var(--gold); }
+
+.radar-chart text { fill: var(--ink-dim); font-size: 10px; letter-spacing: .06em; }
+.radar-chart polygon.stat-area { fill: rgba(122,92,255,.25); stroke: var(--arcane); stroke-width: 2; }
+.radar-chart polygon.stat-frame { fill: none; stroke: rgba(232,220,192,.18); stroke-width: 1; }
+
+.section-card { position: relative; background: linear-gradient(160deg, rgba(23,19,31,.95), rgba(13,11,20,.9)); border: 1px solid rgba(201,162,39,.22); border-radius: 12px; padding: 16px 18px; box-shadow: 0 6px 24px rgba(0,0,0,.45); }
+.section-card::before { content: ''; position: absolute; inset: 0; border-radius: 12px; pointer-events: none; background: linear-gradient(120deg, rgba(201,162,39,.08), transparent 30%); }
+.section-card > .card-title { font-family: var(--font-display); font-size: 15px; letter-spacing: .14em; text-transform: uppercase; color: var(--gold); margin: 0 0 12px; display: flex; align-items: center; gap: 8px; }
+.section-card > .card-title::before { content: '❖'; font-size: 12px; color: var(--arcane); }
+
+.quiet-badge { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 999px; font-size: 11px; letter-spacing: .08em; border: 1px solid rgba(232,220,192,.2); color: var(--ink-dim); }
+.quiet-badge.on { border-color: var(--arcane); color: var(--arcane); box-shadow: 0 0 8px rgba(122,92,255,.4); }
