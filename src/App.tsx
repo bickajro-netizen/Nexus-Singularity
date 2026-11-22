@@ -1,4 +1,4 @@
-import { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react';
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import './App.css';
 import type { CharacterProfile, EnergyBatteries, Goal, Note, RecoveryShieldState, ScheduleBlock } from './core/types';
 import { openNexusDb, getRecord, getAllRecords, putRecord } from './core/db/db';
@@ -17,8 +17,10 @@ import { EnergyView } from './screens/EnergyView';
 const HeroView = lazy(() => import('./screens/HeroView').then((m) => ({ default: m.HeroView })));
 import WorkoutPlayer from './modules/workout/WorkoutPlayer';
 import type { AudioEffect as WPAudioEffect, HapticPattern as WPHapticPattern } from './modules/workout/WorkoutPlayer';
-import type { ExerciseDefinition, WorkoutProgram } from './modules/workout/WorkoutPlayer';
+import type { ExerciseDefinition, WorkoutLog, WorkoutProgram } from './modules/workout/WorkoutPlayer';
 import { VoiceAndAudioEngine } from './modules/ux-voice/VoiceAndAudioEngine';
+import { NexusBridge } from './modules/ux-voice/NexusBridge';
+import { syncQueueRepository } from './repositories/SyncQueueRepository';
 import type { NexusEventMap } from './modules/ux-voice/VoiceAndAudioEngine';
 
 type ViewId = 'now' | 'brain' | 'hero' | 'energy';
@@ -107,6 +109,25 @@ function getVoiceEngine(): VoiceAndAudioEngine | null {
 
 // Neural XP engine (T-A GraphWorker) — spawned lazily on first sealed order.
 let graphWorker: GraphWorker | null = null;
+// Obsidian sync bridge — one instance per app session (AES key lives in IDB).
+let nexusBridge: NexusBridge | null = null;
+function getNexusBridge(): NexusBridge {
+  if (!nexusBridge) nexusBridge = new NexusBridge();
+  return nexusBridge;
+}
+// XP idempotency: one award per workout log
+const processedWorkoutLogs = new Set<string>();
+// Shared GraphWorker formula config (goals pipeline + workout pipeline)
+const FORMULA_CONFIG = {
+  priorityMultipliers: { low: 0.85, medium: 1.0, high: 1.25, critical: 1.6 },
+  comboStepPerChain: 0.08,
+  comboMaxMultiplier: 1.40,
+  diminishingDecayLambda: 0.35,
+  diminishingFloor: 0.25,
+  yerkesOptimumE: 72,
+  yerkesSigma: 22,
+  parentRollupCompletionBonusRatio: 0.15,
+};
 function priorityOf(goalPriority: number | undefined): GraphComputeNode['priority'] {
   if ((goalPriority ?? 0) >= 5) return 'critical';
   if ((goalPriority ?? 0) >= 4) return 'high';
@@ -133,6 +154,17 @@ function App() {
   // fresh copy of live data for the []-effect closures (xp pipeline)
   const dataRef = useRef({ goals, batteries, profile });
   dataRef.current = { goals, batteries, profile };
+  const [obsidianStatus, setObsidianStatus] = useState<'idle' | 'ok' | 'fail'>('idle');
+  const [obsidianToken, setObsidianToken] = useState('');
+  const [obsidianBusy, setObsidianBusy] = useState(false);
+
+  const refreshPendingSync = useCallback(async () => {
+    try {
+      setPendingSync((await syncQueueRepository.listPending()).length);
+    } catch {
+      // queue store unavailable — keep the last count
+    }
+  }, []);
 
   useEffect(() => {
     let alive = true;
@@ -159,14 +191,27 @@ function App() {
         setShield(shieldRow);
         setPrograms(programRows);
         setExercises(exerciseRows);
-        setPendingSync(await getAllRecords<{ status: string }>(db, 'obsidian_sync_queue').then(
-          (rows) => rows.filter((r) => r.status === 'pending').length,
-        ));
+        await refreshPendingSync();
       } catch (err) {
         console.error('[nexus] initial load failed', err);
         setBootError(err instanceof Error ? `${err.name}: ${err.message}` : String(err));
       } finally {
         if (alive) setLoaded(true);
+      }
+    })();
+    // Obsidian bridge: init + flush only when a token was saved earlier — boot
+    // must never depend on Obsidian running, and flushQueue() without a token
+    // would poison the reauth flag.
+    void (async () => {
+      try {
+        const bridge = getNexusBridge();
+        await bridge.init();
+        if (await bridge.getDecryptedToken()) {
+          await bridge.flushQueue();
+          setObsidianStatus((await bridge.checkConnection()) ? 'ok' : 'fail');
+        }
+      } catch (err) {
+        console.error('[nexus] obsidian bridge init failed', err);
       }
     })();
     const offSealed = eventBus.on(EVENT_TYPES.ordersSealed, async (payload) => {
@@ -205,16 +250,7 @@ function App() {
           dailyNodeActionCounts: {},
           characterLevel: pf.level,
           skillLevels: {},
-          formulaConfig: {
-            priorityMultipliers: { low: 0.85, medium: 1.0, high: 1.25, critical: 1.6 },
-            comboStepPerChain: 0.08,
-            comboMaxMultiplier: 1.40,
-            diminishingDecayLambda: 0.35,
-            diminishingFloor: 0.25,
-            yerkesOptimumE: 72,
-            yerkesSigma: 22,
-            parentRollupCompletionBonusRatio: 0.15,
-          },
+          formulaConfig: FORMULA_CONFIG,
         });
         const gained = Math.round(Object.values(result.xpDeltas).reduce((a, b) => a + b, 0)
           + Object.values(result.rolledUpDiffs).reduce((a, b) => a + b, 0));
@@ -243,11 +279,77 @@ function App() {
         console.error('[nexus] xp pipeline failed', err);
       }
     });
+    // Workout XP: persist the WARRIOR-190 log, then award XP through the same
+    // GraphWorker pipeline (one node per program, ratio-based progress).
+    const offWorkout = wpBus.on('workout:finished', async (log: WorkoutLog) => {
+      try {
+        if (processedWorkoutLogs.has(log.id)) return;
+        processedWorkoutLogs.add(log.id);
+        const db = await openNexusDb();
+        await putRecord(db, 'workout_logs', log);
+        const { batteries: bs, profile: pf } = dataRef.current;
+        if (!graphWorker) graphWorker = new GraphWorker();
+        const totalSets = log.sets.length;
+        const completedCount = log.sets.filter((s) => s.completed).length;
+        const nodes: Record<string, GraphComputeNode> = {
+          [log.programId]: {
+            id: log.programId,
+            parentId: null,
+            progressPct: totalSets > 0 ? Math.round((100 * completedCount) / totalSets) : 0,
+            highWatermarkPct: 0,
+            xpBase: 2.5,
+            priority: 'medium',
+            blockedBy: [],
+            skillIds: [],
+            completed: false,
+          },
+        };
+        const result = await graphWorker.compute({
+          snapshotRevision: Date.now(),
+          dateKey: new Date().toISOString().slice(0, 10),
+          nowMs: Date.now(),
+          nodes,
+          changedNodeIds: [log.programId],
+          energyBatteries: bs,
+          recoveryShieldActive: false,
+          comboChainCount: 0,
+          dailyNodeActionCounts: {},
+          characterLevel: pf.level,
+          skillLevels: {},
+          formulaConfig: FORMULA_CONFIG,
+        });
+        const gained = Math.round(Object.values(result.xpDeltas).reduce((a, b) => a + b, 0)
+          + Object.values(result.rolledUpDiffs).reduce((a, b) => a + b, 0));
+        const nextLevel = pf.level + result.levelUpDelta;
+        const newProfile = {
+          ...pf,
+          level: nextLevel,
+          experience: pf.experience + gained,
+          nextLevelXp: 200 + nextLevel * 100,
+        };
+        setProfile(newProfile);
+        await putRecord(db, 'character_profile', newProfile);
+        if (result.levelUpDelta > 0) {
+          eventBus.emit(EVENT_TYPES.levelUp, { entityId: 'primary', oldLevel: pf.level, newLevel: nextLevel, xgained: gained });
+          void getVoiceEngine()?.playEffect('level_up');
+        } else {
+          void getVoiceEngine()?.playEffect('subtask_tick');
+        }
+      } catch (err) {
+        console.error('[nexus] workout xp pipeline failed', err);
+      }
+    });
+    const offSyncQueued = eventBus.on(EVENT_TYPES.syncQueued, () => void refreshPendingSync());
+    // bridge flushes on its own heartbeat — keep the badge honest between flushes
+    const syncTimer = window.setInterval(() => void refreshPendingSync(), 30000);
     const engine = getVoiceEngine();
     setQuiet(engine?.quietMode ?? false);
     return () => {
       alive = false;
       offSealed();
+      offWorkout();
+      offSyncQueued();
+      window.clearInterval(syncTimer);
       graphWorker?.dispose();
       graphWorker = null;
     };
@@ -263,6 +365,24 @@ function App() {
   };
 
   const activeProgram = useMemo(() => programs[0], [programs]);
+
+  const connectObsidian = async () => {
+    const token = obsidianToken.trim();
+    if (!token || obsidianBusy) return;
+    setObsidianBusy(true);
+    try {
+      const bridge = getNexusBridge();
+      await bridge.setObsidianToken(token);
+      await bridge.flushQueue();
+      setObsidianStatus((await bridge.checkConnection()) ? 'ok' : 'fail');
+      await refreshPendingSync();
+    } catch {
+      setObsidianStatus('fail');
+    } finally {
+      setObsidianBusy(false);
+      setObsidianToken('');
+    }
+  };
 
   if (!loaded) {
     return (
@@ -321,6 +441,27 @@ function App() {
               audioEngine={wpAudio}
               eventBus={wpBus}
             />
+          </section>
+        )}
+        {view === 'brain' && (
+          <section className="obsidian-panel">
+            <span className={`sync-badge ${obsidianStatus === 'ok' ? 'ok' : obsidianStatus === 'fail' ? 'warn' : ''}`}>
+              {obsidianStatus === 'ok'
+                ? 'Obsidian подключён'
+                : obsidianStatus === 'fail'
+                  ? 'Obsidian не отвечает'
+                  : 'Obsidian не подключён'}
+            </span>
+            <input
+              type="password"
+              className="obsidian-input"
+              placeholder="API-ключ Obsidian (Local REST API)"
+              value={obsidianToken}
+              onChange={(e) => setObsidianToken(e.target.value)}
+            />
+            <button type="button" className="btn-arcane small" onClick={() => void connectObsidian()} disabled={obsidianBusy || obsidianToken.trim() === ''}>
+              {obsidianBusy ? '…' : 'Синхронизировать'}
+            </button>
           </section>
         )}
         {view === 'brain' && <BrainView goals={goals} notes={notes} pendingSync={pendingSync} />}

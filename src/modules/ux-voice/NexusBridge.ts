@@ -44,15 +44,17 @@ export interface EncryptedTokenEnvelope {
   updatedAt: number;
 }
 
+import { openNexusDb, getRecord, putRecord, getAllRecords, deleteRecord, type StoreName } from '../../core/db/db';
+import { EVENT_TYPES, eventBus } from '../../core/eventbus/eventbus';
+
 export interface NexusBridgeConfig {
   baseUrl?: string;
 }
 
 export class NexusBridge {
   private baseUrl: string;
-  private dbName = 'nexus_singularity_db';
-  private dbVersion = 1;
-  private db: IDBDatabase | null = null;
+  // shared app singleton connection ('nexus-singularity' v4) — never closed by destroy()
+  private dbPromise: Promise<IDBDatabase> | null = null;
   private masterKey: CryptoKey | null = null;
   private decryptedTokenCache: string | null = null;
   private reauthRequired: boolean = false;
@@ -66,8 +68,12 @@ export class NexusBridge {
     this.baseUrl = config.baseUrl || 'https://127.0.0.1:27124';
   }
 
+  private async db(): Promise<IDBDatabase> {
+    if (!this.dbPromise) this.dbPromise = openNexusDb();
+    return this.dbPromise;
+  }
+
   public async init(): Promise<void> {
-    await this.initIndexedDB();
     await this.initCryptoKeyStore();
     this.bindSyncTriggers();
   }
@@ -254,38 +260,11 @@ export class NexusBridge {
       window.clearInterval(this.heartbeatTimer);
       this.heartbeatTimer = null;
     }
-    if (this.db) {
-      this.db.close();
-      this.db = null;
-    }
-  }
-
-  private async initIndexedDB(): Promise<void> {
-    return new Promise((resolve, reject) => {
-      const request = indexedDB.open(this.dbName, this.dbVersion);
-
-      request.onupgradeneeded = (event) => {
-        const db = (event.target as IDBOpenDBRequest).result;
-        if (!db.objectStoreNames.contains('crypto_keystore')) {
-          db.createObjectStore('crypto_keystore', { keyPath: 'id' });
-        }
-        if (!db.objectStoreNames.contains('obsidian_sync_queue')) {
-          db.createObjectStore('obsidian_sync_queue', { keyPath: 'id' });
-        }
-      };
-
-      request.onsuccess = () => {
-        this.db = request.result;
-        resolve();
-      };
-
-      request.onerror = () => reject(request.error);
-    });
+    // do NOT close the shared singleton connection used by the rest of the app
+    this.dbPromise = null;
   }
 
   private async initCryptoKeyStore(): Promise<void> {
-    if (!this.db) await this.initIndexedDB();
-
     const existingRecord = await this.getIdbRecord<CryptoKeyRecord>(
       'crypto_keystore',
       NexusBridge.MASTER_KEY_ID
@@ -310,7 +289,7 @@ export class NexusBridge {
       createdAt: Date.now()
     };
 
-    await this.putIdbRecord('crypto_keystore', record);
+    await putRecord(await this.db(), 'crypto_keystore', record);
     this.masterKey = key;
   }
 
@@ -339,7 +318,8 @@ export class NexusBridge {
       updatedAt: now
     };
 
-    await this.putIdbRecord('obsidian_sync_queue', item);
+    await putRecord(await this.db(), 'obsidian_sync_queue', item);
+    eventBus.emit(EVENT_TYPES.syncQueued, { queueItemId: item.id, endpoint: item.endpoint, payload: { method: item.method, bodyMarkdown: item.bodyMarkdown } });
   }
 
   private async handleFailedRetry(item: ObsidianSyncQueueItem, errorMsg: string): Promise<void> {
@@ -354,58 +334,28 @@ export class NexusBridge {
       updatedAt: Date.now()
     };
 
-    await this.putIdbRecord('obsidian_sync_queue', updated);
+    await putRecord(await this.db(), 'obsidian_sync_queue', updated);
   }
 
   private async getPendingQueueItems(): Promise<ObsidianSyncQueueItem[]> {
-    return new Promise((resolve, reject) => {
-      if (!this.db) return resolve([]);
-      const tx = this.db.transaction('obsidian_sync_queue', 'readonly');
-      const store = tx.objectStore('obsidian_sync_queue');
-      const req = store.getAll();
-
-      req.onsuccess = () => resolve(req.result || []);
-      req.onerror = () => reject(req.error);
-    });
+    const rows = await getAllRecords<ObsidianSyncQueueItem>(await this.db(), 'obsidian_sync_queue');
+    return rows.filter((r) => r.status === 'pending' || r.status === 'retrying');
   }
 
   private async deleteQueueItem(id: string): Promise<void> {
-    return new Promise((resolve, reject) => {
-      if (!this.db) return resolve();
-      const tx = this.db.transaction('obsidian_sync_queue', 'readwrite');
-      const store = tx.objectStore('obsidian_sync_queue');
-      const req = store.delete(id);
-
-      req.onsuccess = () => resolve();
-      req.onerror = () => reject(req.error);
-    });
+    await deleteRecord(await this.db(), 'obsidian_sync_queue', id);
   }
 
-  private async getIdbRecord<T>(storeName: string, id: string): Promise<T | null> {
-    return new Promise((resolve, reject) => {
-      if (!this.db) return resolve(null);
-      const tx = this.db.transaction(storeName, 'readonly');
-      const store = tx.objectStore(storeName);
-      const req = store.get(id);
-
-      req.onsuccess = () => resolve(req.result || null);
-      req.onerror = () => reject(req.error);
-    });
-  }
-
-  private async putIdbRecord<T>(storeName: string, record: T): Promise<void> {
-    return new Promise((resolve, reject) => {
-      if (!this.db) return reject(new Error('DB not initialized'));
-      const tx = this.db.transaction(storeName, 'readwrite');
-      const store = tx.objectStore(storeName);
-      const req = store.put(record);
-
-      req.onsuccess = () => resolve();
-      req.onerror = () => reject(req.error);
-    });
+  private async getIdbRecord<T extends { id: string }>(storeName: StoreName, id: string): Promise<T | null> {
+    return (await getRecord<T>(await this.db(), storeName, id)) ?? null;
   }
 
   private bindSyncTriggers(): void {
+    // idempotent: repeated init() must not stack heartbeats/listeners
+    if (this.heartbeatTimer !== null) {
+      window.clearInterval(this.heartbeatTimer);
+      this.heartbeatTimer = null;
+    }
     window.addEventListener('online', () => {
       this.flushQueue();
     });

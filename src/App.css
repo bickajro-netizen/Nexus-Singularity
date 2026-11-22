@@ -78,3 +78,9 @@
 .meal-check input { accent-color: var(--gold); width: 16px; height: 16px; }
 
 .boot-error { margin: 10px 0; padding: 10px 14px; border: 1px solid var(--crimson); background: rgba(255,77,77,.08); color: #ffb4b4; border-radius: 10px; font-size: 13px; }
+
+/* Obsidian sync panel (Brain tab) */
+.obsidian-panel { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 16px; padding: 10px 14px; border: 1px solid rgba(232,220,192,.18); border-radius: 12px; background: rgba(20,16,10,.35); }
+.obsidian-panel .sync-badge { margin-bottom: 0; }
+.obsidian-input { flex: 1 1 220px; min-width: 200px; background: rgba(15,12,8,.7); border: 1px solid rgba(232,220,192,.25); border-radius: 8px; color: var(--ink); padding: 8px 12px; font-size: 13px; }
+.obsidian-input::placeholder { color: rgba(232,220,192,.45); }
