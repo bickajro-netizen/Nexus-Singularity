@@ -21,6 +21,11 @@ import type { ExerciseDefinition, WorkoutLog, WorkoutProgram } from './modules/w
 import { VoiceAndAudioEngine } from './modules/ux-voice/VoiceAndAudioEngine';
 import { NexusBridge } from './modules/ux-voice/NexusBridge';
 import { syncQueueRepository } from './repositories/SyncQueueRepository';
+import { noteRepository } from './repositories/NoteRepository';
+import { CommandPalette } from './ui/CommandPalette';
+import type { PaletteAction } from './ui/CommandPalette';
+import { NoteComposer } from './ui/NoteComposer';
+import type { ComposerNote } from './ui/NoteComposer';
 import type { NexusEventMap } from './modules/ux-voice/VoiceAndAudioEngine';
 
 type ViewId = 'now' | 'brain' | 'hero' | 'energy';
@@ -141,6 +146,21 @@ function sumGained(result: { xpDeltas: Record<string, number>; rolledUpDiffs: Re
   return Number.isFinite(raw) ? Math.max(0, Math.round(raw)) : 0;
 }
 
+// answer 3а: XP accumulates raw; normalize so the bar shows progress WITHIN
+// the level (level catches up immediately, not on the next event)
+function normalizeProfileLevel(p: CharacterProfile): CharacterProfile {
+  let level = Math.max(1, Math.floor(p.level ?? 1));
+  let exp = Math.max(0, Math.floor(p.experience ?? 0));
+  let next = p.nextLevelXp && p.nextLevelXp > 0 ? p.nextLevelXp : 200 + level * 100;
+  let guard = 0;
+  while (exp >= next && guard++ < 100) {
+    exp -= next;
+    level += 1;
+    next = 200 + level * 100;
+  }
+  return { ...p, level, experience: exp, nextLevelXp: next };
+}
+
 // Serialize profile read-modify-write: ordersSealed and workout:finished can
 // overlap, and last-write-wins would silently drop XP.
 let profileChain: Promise<void> = Promise.resolve();
@@ -166,6 +186,7 @@ function App() {
   const [showWorkout, setShowWorkout] = useState(false);
   const [sealedFlash, setSealedFlash] = useState(false);
   const [bootError, setBootError] = useState<string | null>(null);
+  const [paletteOpen, setPaletteOpen] = useState(false);
   // fresh copy of live data for the []-effect closures (xp pipeline)
   const dataRef = useRef({ goals, batteries, profile });
   dataRef.current = { goals, batteries, profile };
@@ -203,7 +224,13 @@ function App() {
         setGoals(goalsRows);
         setSchedule(scheduleRows);
         setNotes(noteRows);
-        if (profileRow) setProfile(profileRow);
+        if (profileRow) {
+          const norm = normalizeProfileLevel(profileRow);
+          if (JSON.stringify(norm) !== JSON.stringify(profileRow)) {
+            await putRecord(db, 'character_profile', norm);
+          }
+          setProfile(norm);
+        }
         if (batteryRow) setBatteries(batteryRow);
         setShield(shieldRow);
         setPrograms(programRows);
@@ -273,12 +300,12 @@ function App() {
         await enqueueProfileWrite(async () => {
           const { profile: current } = dataRef.current;
           const nextLevel = current.level + result.levelUpDelta;
-          const newProfile = {
+          const newProfile = normalizeProfileLevel({
             ...current,
             level: nextLevel,
             experience: current.experience + gained,
             nextLevelXp: 200 + nextLevel * 100,
-          };
+          });
           setProfile(newProfile);
           const db = await openNexusDb();
           await putRecord(db, 'character_profile', newProfile);
@@ -287,8 +314,8 @@ function App() {
             const node = await getRecord<SkillNode & { id: string }>(db, 'skill_nodes', skillId);
             if (node) await putRecord(db, 'skill_nodes', { ...node, xp: Math.round(((node.xp ?? 0) + delta) * 10) / 10 });
           }
-          if (result.levelUpDelta > 0) {
-            eventBus.emit(EVENT_TYPES.levelUp, { entityId: 'primary', oldLevel: current.level, newLevel: nextLevel, xgained: gained });
+          if (newProfile.level > current.level) {
+            eventBus.emit(EVENT_TYPES.levelUp, { entityId: 'primary', oldLevel: current.level, newLevel: newProfile.level, xgained: gained });
             void getVoiceEngine()?.playEffect('level_up');
           } else {
             void getVoiceEngine()?.playEffect('subtask_tick');
@@ -346,16 +373,16 @@ function App() {
         await enqueueProfileWrite(async () => {
           const { profile: current } = dataRef.current;
           const nextLevel = current.level + result.levelUpDelta;
-          const newProfile = {
+          const newProfile = normalizeProfileLevel({
             ...current,
             level: nextLevel,
             experience: current.experience + gained,
             nextLevelXp: 200 + nextLevel * 100,
-          };
+          });
           setProfile(newProfile);
           await putRecord(await openNexusDb(), 'character_profile', newProfile);
-          if (result.levelUpDelta > 0) {
-            eventBus.emit(EVENT_TYPES.levelUp, { entityId: 'primary', oldLevel: current.level, newLevel: nextLevel, xgained: gained });
+          if (newProfile.level > current.level) {
+            eventBus.emit(EVENT_TYPES.levelUp, { entityId: 'primary', oldLevel: current.level, newLevel: newProfile.level, xgained: gained });
             void getVoiceEngine()?.playEffect('level_up');
           } else {
             void getVoiceEngine()?.playEffect('subtask_tick');
@@ -373,6 +400,14 @@ function App() {
     const offSyncQueued = eventBus.on(EVENT_TYPES.syncQueued, () => void refreshPendingSync());
     // bridge flushes on its own heartbeat — keep the badge honest between flushes
     const syncTimer = window.setInterval(() => void refreshPendingSync(), 30000);
+    // Ctrl+K / Cmd+K command palette
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'k' || e.key === 'K')) {
+        e.preventDefault();
+        setPaletteOpen((v) => !v);
+      }
+    };
+    window.addEventListener('keydown', onKey);
     const engine = getVoiceEngine();
     setQuiet(engine?.quietMode ?? false);
     return () => {
@@ -380,6 +415,7 @@ function App() {
       offSealed();
       offWorkout();
       offSyncQueued();
+      window.removeEventListener('keydown', onKey);
       window.clearInterval(syncTimer);
       graphWorker?.dispose();
       graphWorker = null;
@@ -413,6 +449,54 @@ function App() {
       setObsidianBusy(false);
       setObsidianToken('');
     }
+  };
+
+  const paletteActions = useMemo<PaletteAction[]>(() => {
+    const acts: PaletteAction[] = TABS.map((t) => ({
+      id: `view-${t.id}`,
+      label: `Раздел: ${t.label}`,
+      hint: 'перейти',
+      run: () => setView(t.id),
+    }));
+    if (workoutReady) {
+      acts.push({
+        id: 'workout-start',
+        label: '⚔ Начать тренировку (WARRIOR-190)',
+        hint: 'Сейчас',
+        run: () => { setView('now'); setShowWorkout(true); },
+      });
+    }
+    acts.push({
+      id: 'quiet-toggle',
+      label: quiet ? '🔊 Выключить тихий режим' : '🔇 Включить тихий режим',
+      hint: 'звук',
+      run: () => toggleQuiet(),
+    });
+    return acts;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workoutReady, quiet]);
+
+  // Гримуар: сохранить в notes store и сразу вытолкнуть в vault Obsidian
+  const saveNote = async (n: ComposerNote) => {
+    const now = new Date().toISOString();
+    const noteId = typeof crypto !== 'undefined' && 'randomUUID' in crypto
+      ? crypto.randomUUID()
+      : `note_${Date.now().toString(36)}`;
+    const created: Note = {
+      id: noteId,
+      title: n.title,
+      content: n.bodyMd,
+      created: now,
+      modified: now,
+      backlinks: [],
+    };
+    await noteRepository.create(created);
+    setNotes((prev) => [...prev, created]);
+    const safeTitle = n.title.replace(/[\\/:*?"<>|]/g, '-').trim();
+    const path = n.noteType === 'daily_journal' && n.dateKey
+      ? `NEXUS/Daily/${n.dateKey} ${safeTitle}.md`
+      : `NEXUS/Notes/${safeTitle}.md`;
+    void getNexusBridge().pushMarkdown(path, n.bodyMd).then(() => refreshPendingSync());
   };
 
   if (!loaded) {
@@ -475,6 +559,12 @@ function App() {
           </section>
         )}
         {view === 'brain' && (
+          <section className="grimoire-composer">
+            <h2 className="card-title">❖ Гримуар · новая запись</h2>
+            <NoteComposer onSave={saveNote} />
+          </section>
+        )}
+        {view === 'brain' && (
           <section className="obsidian-panel">
             <span className={`sync-badge ${obsidianStatus === 'ok' ? 'ok' : obsidianStatus === 'fail' ? 'warn' : ''}`}>
               {obsidianStatus === 'ok'
@@ -506,6 +596,30 @@ function App() {
 
       {bootError && <div className="boot-error">⚠ Ошибка загрузки: {bootError}</div>}
       <footer className="footer">NEXUS // SINGULARITY · schema v4 · 22.11.2026</footer>
+
+      <nav className="bottom-nav" aria-label="Разделы">
+        {TABS.map((t) => (
+          <button
+            key={t.id}
+            type="button"
+            className={view === t.id ? 'active' : ''}
+            onClick={() => setView(t.id)}
+          >
+            {t.label}
+          </button>
+        ))}
+        <button
+          type="button"
+          className="fab"
+          title="Тренировка WARRIOR-190"
+          onClick={() => { setView('now'); setShowWorkout(true); }}
+          disabled={!workoutReady}
+        >
+          ⚔
+        </button>
+      </nav>
+
+      <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} actions={paletteActions} />
     </div>
   );
 }

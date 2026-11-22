@@ -5,7 +5,7 @@
 import rawState from './state-phone-v6.json';
 import starterExercises from '../modules/workout/starter-exercises.json';
 import type { ExerciseDefinition } from '../modules/workout/WorkoutPlayer';
-import { openNexusDb, putRecord, getRecord } from '../core/db/db';
+import { openNexusDb, putRecord, getRecord, getAllRecords } from '../core/db/db';
 import type { BodyMetrics, CharacterProfile, EnergyBatteries, Goal, RecoveryShieldState, ScheduleBlock, SkillNode } from '../core/types';
 import { computeYerkesDodsonMultiplier } from '../core/math/xp';
 
@@ -54,8 +54,33 @@ export async function isSeeded(): Promise<boolean> {
   return !!marker;
 }
 
+// Repair persisted programs written by the pre-prescriptions seed: the player
+// contract requires WorkoutDay{dayIndex,label,quietEveningSafe,prescriptions[]}.
+// Runs on EVERY boot (cheap count check) — must cover already-marked stores.
+async function repairWorkoutPrograms(db: IDBDatabase): Promise<void> {
+  const all = await getAllRecords<{ id: string; exercises: string[]; days?: unknown[] }>(db, 'workout_programs');
+  for (const prog of all) {
+    const broken = !prog.days || prog.days.length === 0
+      || (prog.days as Array<{ prescriptions?: unknown }>).some((d) => !d.prescriptions || (d.prescriptions as unknown[]).length === 0);
+    if (!broken) continue;
+    const exercises = prog.exercises ?? [];
+    await putRecord(db, 'workout_programs', {
+      ...prog,
+      days: [{
+        dayIndex: 0,
+        label: 'Вечерний блок · комната',
+        quietEveningSafe: true,
+        prescriptions: exercises.map((id: string) => ({
+          exerciseId: id, targetSets: 3, targetRepsMin: 8, targetRepsMax: 12, loadKg: 2, rpeCap: 8, tempo: '2-0-2',
+        })),
+      }],
+    });
+  }
+}
+
 export async function ensureFirstRunSeed(): Promise<void> {
   const db = await openNexusDb();
+  await repairWorkoutPrograms(db);
   const done = await isSeeded();
   if (done) return;
 
@@ -123,7 +148,21 @@ export async function ensureFirstRunSeed(): Promise<void> {
     rpeCap: 8,
     allow1RM: false,
     forbidHeadNeckBridges: true,
-    days: [{ targetSets: 3, targetRepsMin: 8, targetRepsMax: 12, loadKg: 2, tempo: '2-0-2' }],
+    days: [{
+      // WorkoutDay contract (WorkoutPlayer): dayIndex/label/quietEveningSafe/prescriptions
+      dayIndex: 0,
+      label: 'Вечерний блок · комната',
+      quietEveningSafe: true,
+      prescriptions: exercises.map((e) => ({
+        exerciseId: e.id,
+        targetSets: 3,
+        targetRepsMin: 8,
+        targetRepsMax: 12,
+        loadKg: 2,
+        rpeCap: 8,
+        tempo: '2-0-2',
+      })),
+    }],
   });
 
   // primary states

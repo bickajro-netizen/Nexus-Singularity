@@ -251,10 +251,26 @@ export const WorkoutPlayer: React.FC<WorkoutPlayerProps> = ({
         })),
       };
     }
+    const pickDay = (d: WorkoutDay | undefined): WorkoutDay => {
+      // legacy programs (pre-prescriptions seed) have no day shape — synthesize
+      const day = d ?? { dayIndex: 0, label: 'Session', quietEveningSafe: true, prescriptions: [] };
+      if (day.prescriptions && day.prescriptions.length > 0) return day;
+      return {
+        ...day,
+        prescriptions: program.exercises.map((id) => ({
+          exerciseId: id,
+          targetSets: 3,
+          targetRepsMin: 8,
+          targetRepsMax: 12,
+          loadKg: 0,
+          rpeCap: 8,
+        })),
+      };
+    };
     if (typeof dayIndex === 'number') {
-      return program.days.find((d) => d.dayIndex === dayIndex) ?? program.days[0];
+      return pickDay(program.days.find((d) => d.dayIndex === dayIndex) ?? program.days[0]);
     }
-    return program.days[0];
+    return pickDay(program.days[0]);
   }, [program, dayIndex]);
 
   const [exerciseOrder, setExerciseOrder] = useState<string[]>(() =>
