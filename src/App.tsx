@@ -184,7 +184,9 @@ function App() {
             parentId: null,
             progressPct: sealed ? 100 : 0,
             highWatermarkPct: 0,
-            xpBase: (g as typeof g & { legacyXp?: number }).legacyXp ?? 30,
+            // blueprint formula multiplies progressDelta(%) by xpBase; fixture xp
+            // is "XP per completed goal" → normalize to per-percent scale
+            xpBase: ((g as typeof g & { legacyXp?: number }).legacyXp ?? 30) / 100,
             priority: priorityOf((g as typeof g & { priority?: number }).priority),
             blockedBy: [],
             skillIds: (g as typeof g & { skills?: string[] }).skills ?? [],
