@@ -1,7 +1,7 @@
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import './App.css';
 import type { CharacterProfile, EnergyBatteries, Goal, Note, RecoveryShieldState, ScheduleBlock } from './core/types';
-import { openNexusDb, getRecord, getAllRecords, putRecord } from './core/db/db';
+import { openNexusDb, getRecord, getAllRecords, putRecord, deleteRecord } from './core/db/db';
 import { ensureFirstRunSeed } from './seed/firstRun';
 import { computeYerkesDodsonMultiplier } from './core/math/xp';
 import { EVENT_TYPES, eventBus } from './core/eventbus/eventbus';
@@ -308,7 +308,6 @@ function App() {
         // IDB is the source of truth for idempotency (the in-memory guard dies on reload)
         const existing = await getRecord<WorkoutLog>(db, 'workout_logs', log.id);
         if (existing) return;
-        await putRecord(db, 'workout_logs', log);
         const { batteries: bs, profile: pf } = dataRef.current;
         if (!graphWorker) graphWorker = new GraphWorker();
         const totalSets = log.sets.length;
@@ -340,6 +339,9 @@ function App() {
           skillLevels: {},
           formulaConfig: FORMULA_CONFIG,
         });
+        // persist the log only after a successful compute, so a pipeline failure
+        // leaves the IDB idempotency guard clean for a re-emitted log
+        await putRecord(db, 'workout_logs', log);
         const gained = sumGained(result);
         await enqueueProfileWrite(async () => {
           const { profile: current } = dataRef.current;
@@ -360,7 +362,11 @@ function App() {
           }
         });
       } catch (err) {
+        // rollback: let a re-emitted log retry the whole pipeline
         processedWorkoutLogs.delete(log.id);
+        try {
+          await deleteRecord(await openNexusDb(), 'workout_logs', log.id);
+        } catch { /* log row never landed */ }
         console.error('[nexus] workout xp pipeline failed', err);
       }
     });

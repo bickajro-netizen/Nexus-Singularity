@@ -341,6 +341,8 @@ export class NexusBridge {
     const updated: ObsidianSyncQueueItem = {
       ...item,
       attemptCount: attempt,
+      // keep the indexed mirror in sync (diagnostics read retryCount)
+      retryCount: attempt,
       lastError: errorMsg,
       status: isDead ? 'dead_letter' : 'retrying',
       nextRetryAt: Date.now() + Math.pow(2, attempt) * 60 * 1000,
