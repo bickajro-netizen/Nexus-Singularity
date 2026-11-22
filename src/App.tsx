@@ -135,6 +135,21 @@ function priorityOf(goalPriority: number | undefined): GraphComputeNode['priorit
   return 'low';
 }
 
+function sumGained(result: { xpDeltas: Record<string, number>; rolledUpDiffs: Record<string, number> }): number {
+  const raw = Object.values(result.xpDeltas).reduce((a, b) => a + b, 0)
+    + Object.values(result.rolledUpDiffs).reduce((a, b) => a + b, 0);
+  return Number.isFinite(raw) ? Math.max(0, Math.round(raw)) : 0;
+}
+
+// Serialize profile read-modify-write: ordersSealed and workout:finished can
+// overlap, and last-write-wins would silently drop XP.
+let profileChain: Promise<void> = Promise.resolve();
+function enqueueProfileWrite(task: () => Promise<void>): Promise<void> {
+  const next = profileChain.then(task, task);
+  profileChain = next.catch(() => undefined);
+  return next;
+}
+
 function App() {
   const [view, setView] = useState<ViewId>('now');
   const [loaded, setLoaded] = useState(false);
@@ -160,7 +175,9 @@ function App() {
 
   const refreshPendingSync = useCallback(async () => {
     try {
-      setPendingSync((await syncQueueRepository.listPending()).length);
+      // mirror the bridge's flush filter: pending + retrying both need sending
+      const rows = await syncQueueRepository.listAll();
+      setPendingSync(rows.filter((r) => r.status === 'pending' || r.status === 'retrying').length);
     } catch {
       // queue store unavailable — keep the last count
     }
@@ -252,29 +269,31 @@ function App() {
           skillLevels: {},
           formulaConfig: FORMULA_CONFIG,
         });
-        const gained = Math.round(Object.values(result.xpDeltas).reduce((a, b) => a + b, 0)
-          + Object.values(result.rolledUpDiffs).reduce((a, b) => a + b, 0));
-        const nextLevel = pf.level + result.levelUpDelta;
-        const newProfile = {
-          ...pf,
-          level: nextLevel,
-          experience: pf.experience + gained,
-          nextLevelXp: 200 + nextLevel * 100,
-        };
-        setProfile(newProfile);
-        const db = await openNexusDb();
-        await putRecord(db, 'character_profile', newProfile);
-        // skill xp propagation
-        for (const [skillId, delta] of Object.entries(result.skillDeltas)) {
-          const node = await getRecord<SkillNode & { id: string }>(db, 'skill_nodes', skillId);
-          if (node) await putRecord(db, 'skill_nodes', { ...node, xp: Math.round(((node.xp ?? 0) + delta) * 10) / 10 });
-        }
-        if (result.levelUpDelta > 0) {
-          eventBus.emit(EVENT_TYPES.levelUp, { entityId: 'primary', oldLevel: pf.level, newLevel: nextLevel, xgained: gained });
-          void getVoiceEngine()?.playEffect('level_up');
-        } else {
-          void getVoiceEngine()?.playEffect('subtask_tick');
-        }
+        const gained = sumGained(result);
+        await enqueueProfileWrite(async () => {
+          const { profile: current } = dataRef.current;
+          const nextLevel = current.level + result.levelUpDelta;
+          const newProfile = {
+            ...current,
+            level: nextLevel,
+            experience: current.experience + gained,
+            nextLevelXp: 200 + nextLevel * 100,
+          };
+          setProfile(newProfile);
+          const db = await openNexusDb();
+          await putRecord(db, 'character_profile', newProfile);
+          // skill xp propagation
+          for (const [skillId, delta] of Object.entries(result.skillDeltas)) {
+            const node = await getRecord<SkillNode & { id: string }>(db, 'skill_nodes', skillId);
+            if (node) await putRecord(db, 'skill_nodes', { ...node, xp: Math.round(((node.xp ?? 0) + delta) * 10) / 10 });
+          }
+          if (result.levelUpDelta > 0) {
+            eventBus.emit(EVENT_TYPES.levelUp, { entityId: 'primary', oldLevel: current.level, newLevel: nextLevel, xgained: gained });
+            void getVoiceEngine()?.playEffect('level_up');
+          } else {
+            void getVoiceEngine()?.playEffect('subtask_tick');
+          }
+        });
       } catch (err) {
         console.error('[nexus] xp pipeline failed', err);
       }
@@ -286,6 +305,9 @@ function App() {
         if (processedWorkoutLogs.has(log.id)) return;
         processedWorkoutLogs.add(log.id);
         const db = await openNexusDb();
+        // IDB is the source of truth for idempotency (the in-memory guard dies on reload)
+        const existing = await getRecord<WorkoutLog>(db, 'workout_logs', log.id);
+        if (existing) return;
         await putRecord(db, 'workout_logs', log);
         const { batteries: bs, profile: pf } = dataRef.current;
         if (!graphWorker) graphWorker = new GraphWorker();
@@ -318,24 +340,27 @@ function App() {
           skillLevels: {},
           formulaConfig: FORMULA_CONFIG,
         });
-        const gained = Math.round(Object.values(result.xpDeltas).reduce((a, b) => a + b, 0)
-          + Object.values(result.rolledUpDiffs).reduce((a, b) => a + b, 0));
-        const nextLevel = pf.level + result.levelUpDelta;
-        const newProfile = {
-          ...pf,
-          level: nextLevel,
-          experience: pf.experience + gained,
-          nextLevelXp: 200 + nextLevel * 100,
-        };
-        setProfile(newProfile);
-        await putRecord(db, 'character_profile', newProfile);
-        if (result.levelUpDelta > 0) {
-          eventBus.emit(EVENT_TYPES.levelUp, { entityId: 'primary', oldLevel: pf.level, newLevel: nextLevel, xgained: gained });
-          void getVoiceEngine()?.playEffect('level_up');
-        } else {
-          void getVoiceEngine()?.playEffect('subtask_tick');
-        }
+        const gained = sumGained(result);
+        await enqueueProfileWrite(async () => {
+          const { profile: current } = dataRef.current;
+          const nextLevel = current.level + result.levelUpDelta;
+          const newProfile = {
+            ...current,
+            level: nextLevel,
+            experience: current.experience + gained,
+            nextLevelXp: 200 + nextLevel * 100,
+          };
+          setProfile(newProfile);
+          await putRecord(await openNexusDb(), 'character_profile', newProfile);
+          if (result.levelUpDelta > 0) {
+            eventBus.emit(EVENT_TYPES.levelUp, { entityId: 'primary', oldLevel: current.level, newLevel: nextLevel, xgained: gained });
+            void getVoiceEngine()?.playEffect('level_up');
+          } else {
+            void getVoiceEngine()?.playEffect('subtask_tick');
+          }
+        });
       } catch (err) {
+        processedWorkoutLogs.delete(log.id);
         console.error('[nexus] workout xp pipeline failed', err);
       }
     });

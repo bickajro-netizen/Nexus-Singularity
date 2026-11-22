@@ -16,7 +16,8 @@ export interface Task { id: string; title: string; description: string; projectI
 export interface Subtask { id: string; title: string; taskId: string; completed: boolean; progress?: number }
 export interface DailyHabit { id: string; title: string; completed: boolean; progress: number; lastCompleted?: string; energyTag: EnergyTag; canvasX?: number; canvasY?: number }
 export interface Note { id: string; title: string; content: string; created: string; modified: string; backlinks: string[]; dailyJournal?: string; morningRitualSnapshot?: string; ordersForTomorrowSnapshot?: string }
-export interface ObsidianSyncQueueItem { id: string; endpoint: string; payload: unknown; retryCount: number; created: string; lastAttempt: string; status: 'pending' | 'sent' | 'failed' }
+// status union = superset of NexusBridge queue lifecycle (pending/retrying/dead_letter) and repository (sent/failed)
+export interface ObsidianSyncQueueItem { id: string; endpoint: string; payload: unknown; retryCount: number; created: string; lastAttempt: string; status: 'pending' | 'sent' | 'failed' | 'retrying' | 'dead_letter' }
 export interface CryptoKeyRecord { id: string; algorithm: string; created: string }
 export interface EncryptedTokenEnvelope { iv: Uint8Array<ArrayBuffer>; ciphertext: ArrayBuffer }
 export interface ScheduleBlock { id: string; type: 'lesson' | 'timeblock' | 'break'; title: string; subject?: string; startTime: string; endTime: string; daysOfWeek: number[]; gradeLevel?: string; room?: string }

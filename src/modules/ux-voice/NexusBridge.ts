@@ -21,6 +21,7 @@ export interface ObsidianSyncQueueItem {
   bodyMarkdown: string;
   payloadHash: string;
   attemptCount: number;
+  retryCount: number;
   maxAttempts: number;
   nextRetryAt: number;
   lastError: string | null;
@@ -59,6 +60,8 @@ export class NexusBridge {
   private decryptedTokenCache: string | null = null;
   private reauthRequired: boolean = false;
   private heartbeatTimer: number | null = null;
+  // in-flight guard: heartbeat/online/panel flushes must not interleave
+  private flushPromise: Promise<void> | null = null;
 
   private static readonly MASTER_KEY_ID = 'obsidian_aes_gcm_master';
   private static readonly STORAGE_ENVELOPE_KEY = 'obsidian_token_envelope';
@@ -211,7 +214,15 @@ export class NexusBridge {
     return false;
   }
 
-  public async flushQueue(): Promise<void> {
+  public flushQueue(): Promise<void> {
+    if (this.flushPromise) return this.flushPromise;
+    this.flushPromise = this.flushQueueInner().finally(() => {
+      this.flushPromise = null;
+    });
+    return this.flushPromise;
+  }
+
+  private async flushQueueInner(): Promise<void> {
     if (!navigator.onLine) return;
     const token = await this.getDecryptedToken();
     if (!token) {
@@ -310,6 +321,8 @@ export class NexusBridge {
       bodyMarkdown: params.bodyMarkdown,
       payloadHash,
       attemptCount: 1,
+      // STORE_SCHEMAS indexes retryCount — keep both fields in sync for diagnostics
+      retryCount: 0,
       maxAttempts: 8,
       nextRetryAt: now + Math.pow(2, 1) * 60 * 1000,
       lastError: params.lastError,
