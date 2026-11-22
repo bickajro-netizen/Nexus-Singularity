@@ -54,8 +54,9 @@ export function BrainView({ goals, notes, pendingSync }: BrainViewProps) {
       </SectionCard>
 
       <SectionCard title="Синк Обсидиан">
+        {/* queue semantics only — connection status lives in the Obsidian panel above */}
         <div className={`sync-badge ${pendingSync === 0 ? 'ok' : 'warn'}`}>
-          {pendingSync === 0 ? 'Синхронизировано' : `В очереди: ${pendingSync}`}
+          {pendingSync === 0 ? 'Очередь пуста' : `В очереди: ${pendingSync}`}
         </div>
         <ul className="dim-list">
           <li>NEXUS/Daily</li>

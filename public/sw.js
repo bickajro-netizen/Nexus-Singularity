@@ -11,7 +11,7 @@
  *   → same-origin guard skips it; explicit blocklist guard as belt-and-braces.
  * - All other navigations fall through to network.
  */
-const CACHE = 'nexus-shell-v5'; // bump: drops stale hashed chunks from v4 deploys
+const CACHE = 'nexus-shell-v6'; // bump: drops stale hashed chunks from v5 deploys
 const SHELL = ['./', './index.html', './manifest.webmanifest'];
 
 self.addEventListener('install', (event) => {
