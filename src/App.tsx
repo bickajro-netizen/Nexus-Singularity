@@ -1,10 +1,13 @@
-import { Suspense, lazy, useEffect, useMemo, useState } from 'react';
+import { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react';
 import './App.css';
 import type { CharacterProfile, EnergyBatteries, Goal, Note, RecoveryShieldState, ScheduleBlock } from './core/types';
-import { openNexusDb, getRecord, getAllRecords } from './core/db/db';
+import { openNexusDb, getRecord, getAllRecords, putRecord } from './core/db/db';
 import { ensureFirstRunSeed } from './seed/firstRun';
 import { computeYerkesDodsonMultiplier } from './core/math/xp';
 import { EVENT_TYPES, eventBus } from './core/eventbus/eventbus';
+import { GraphWorker } from './core/worker/GraphWorker';
+import type { GraphComputeNode } from './core/worker/protocol';
+import type { SkillNode } from './core/types';
 import { mediaBlobRepository } from './repositories/MediaBlobRepository';
 import { BatteryChips, QuietBadge, XpBar } from './ui/widgets';
 import { NowView } from './screens/NowView';
@@ -102,6 +105,15 @@ function getVoiceEngine(): VoiceAndAudioEngine | null {
   return voiceEngine;
 }
 
+// Neural XP engine (T-A GraphWorker) — spawned lazily on first sealed order.
+let graphWorker: GraphWorker | null = null;
+function priorityOf(goalPriority: number | undefined): GraphComputeNode['priority'] {
+  if ((goalPriority ?? 0) >= 5) return 'critical';
+  if ((goalPriority ?? 0) >= 4) return 'high';
+  if ((goalPriority ?? 0) >= 3) return 'medium';
+  return 'low';
+}
+
 function App() {
   const [view, setView] = useState<ViewId>('now');
   const [loaded, setLoaded] = useState(false);
@@ -118,6 +130,9 @@ function App() {
   const [showWorkout, setShowWorkout] = useState(false);
   const [sealedFlash, setSealedFlash] = useState(false);
   const [bootError, setBootError] = useState<string | null>(null);
+  // fresh copy of live data for the []-effect closures (xp pipeline)
+  const dataRef = useRef({ goals, batteries, profile });
+  dataRef.current = { goals, batteries, profile };
 
   useEffect(() => {
     let alive = true;
@@ -154,15 +169,85 @@ function App() {
         if (alive) setLoaded(true);
       }
     })();
-    const offSealed = eventBus.on(EVENT_TYPES.ordersSealed, () => {
+    const offSealed = eventBus.on(EVENT_TYPES.ordersSealed, async (payload) => {
       setSealedFlash(true);
       window.setTimeout(() => setSealedFlash(false), 2400);
+      // Neural XP pipeline: GraphWorker computes yerkes-weighted deltas over the goal graph.
+      try {
+        const { goals: gs, batteries: bs, profile: pf } = dataRef.current;
+        if (!graphWorker) graphWorker = new GraphWorker();
+        const nodes: Record<string, GraphComputeNode> = {};
+        for (const g of gs) {
+          const sealed = g.id === payload.orderId;
+          nodes[g.id] = {
+            id: g.id,
+            parentId: null,
+            progressPct: sealed ? 100 : 0,
+            highWatermarkPct: 0,
+            xpBase: (g as typeof g & { legacyXp?: number }).legacyXp ?? 30,
+            priority: priorityOf((g as typeof g & { priority?: number }).priority),
+            blockedBy: [],
+            skillIds: (g as typeof g & { skills?: string[] }).skills ?? [],
+            completed: false,
+          };
+        }
+        const result = await graphWorker.compute({
+          snapshotRevision: Date.now(),
+          dateKey: new Date().toISOString().slice(0, 10),
+          nowMs: Date.now(),
+          nodes,
+          changedNodeIds: [payload.orderId],
+          energyBatteries: bs,
+          recoveryShieldActive: false,
+          comboChainCount: 0,
+          dailyNodeActionCounts: {},
+          characterLevel: pf.level,
+          skillLevels: {},
+          formulaConfig: {
+            priorityMultipliers: { low: 0.85, medium: 1.0, high: 1.25, critical: 1.6 },
+            comboStepPerChain: 0.08,
+            comboMaxMultiplier: 1.40,
+            diminishingDecayLambda: 0.35,
+            diminishingFloor: 0.25,
+            yerkesOptimumE: 72,
+            yerkesSigma: 22,
+            parentRollupCompletionBonusRatio: 0.15,
+          },
+        });
+        const gained = Math.round(Object.values(result.xpDeltas).reduce((a, b) => a + b, 0)
+          + Object.values(result.rolledUpDiffs).reduce((a, b) => a + b, 0));
+        const nextLevel = pf.level + result.levelUpDelta;
+        const newProfile = {
+          ...pf,
+          level: nextLevel,
+          experience: pf.experience + gained,
+          nextLevelXp: 200 + nextLevel * 100,
+        };
+        setProfile(newProfile);
+        const db = await openNexusDb();
+        await putRecord(db, 'character_profile', newProfile);
+        // skill xp propagation
+        for (const [skillId, delta] of Object.entries(result.skillDeltas)) {
+          const node = await getRecord<SkillNode & { id: string }>(db, 'skill_nodes', skillId);
+          if (node) await putRecord(db, 'skill_nodes', { ...node, xp: Math.round(((node.xp ?? 0) + delta) * 10) / 10 });
+        }
+        if (result.levelUpDelta > 0) {
+          eventBus.emit(EVENT_TYPES.levelUp, { entityId: 'primary', oldLevel: pf.level, newLevel: nextLevel, xgained: gained });
+          void getVoiceEngine()?.playEffect('level_up');
+        } else {
+          void getVoiceEngine()?.playEffect('subtask_tick');
+        }
+      } catch (err) {
+        console.error('[nexus] xp pipeline failed', err);
+      }
     });
     const engine = getVoiceEngine();
     setQuiet(engine?.quietMode ?? false);
     return () => {
       alive = false;
       offSealed();
+      graphWorker?.dispose();
+      graphWorker = null;
     };
   }, []);
 
