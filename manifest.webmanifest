@@ -1,0 +1,10 @@
+{
+  "name": "NEXUS // LIFE OS",
+  "short_name": "NEXUS",
+  "description": "Local-first modular life operating system",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0a0e14",
+  "theme_color": "#0a0e14",
+  "icons": [{ "src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml" }]
+}
